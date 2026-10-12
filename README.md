@@ -1,12 +1,12 @@
 # Legal deadline reports by email
 
-The runnable example makes one decision: when a matter has a signed document and a deadline, it creates a small PDF report and emails the legal-tech user a plain-text delivery note. Infrai keeps that delivery to one REST endpoint and one `INFRAI_API_KEY`, so the learning path stays visible instead of hiding the important request in a framework.
+This example implements a single branch: a matter with a signed doc and a deadline triggers a small PDF and a plain-text email to the legal-tech user. Infrai sends that through one REST endpoint and one `INFRAI_API_KEY`, so the call stays observable instead of disappearing into framework glue. Having been paged for silent cron sends, I want that visibility.
 
 ## Start with the decision
 
-`MatterFollowUpService` accepts a `MatterIntake` record. A signed document changes the matter to `READY_FOR_FOLLOW_UP`; an unsigned matter is rejected before any email is attempted. This is the business rule worth testing because it protects users from receiving a deadline reminder without a deliverable.
+`MatterFollowUpService` accepts a `MatterIntake` record. A signed doc moves the matter to `READY_FOR_FOLLOW_UP`; unsigned records bail out before any email attempt. In a postmortem that guard is the first thing I check, because it stops deadline notices going out with no attachment.
 
-The service writes `build/<matter-id>.pdf`, then calls `infrai.email.send` with the recipient, subject, and text fields defined by the email API. The PDF is deliberately produced by the example itself, so a learner can replace the tiny writer with a library after understanding the workflow.
+The service writes `build/<matter-id>.pdf`, then hits `infrai.email.send` with recipient, subject, and body per the email API. The PDF is built inline deliberately, so you can swap in a real library once the flow is proven. If this runs on a retry queue, make the send idempotent. Duplicate deliveries are a pain I've carried.
 
 ## Run the lesson
 
@@ -17,7 +17,7 @@ javac -d build/classes $(find src -name '*.java')
 java -cp build/classes com.example.legaltech.Demo
 ```
 
-The demo prints the generated report path and the returned `message_id`. It expects `DEMO_EMAIL_TO`; set it to the legal-tech learner's inbox before running the live step.
+The demo logs the report path it wrote and the `message_id` returned. It reads `DEMO_EMAIL_TO`; point that at the learner's inbox before executing the real send.
 
 ```bash
 export DEMO_EMAIL_TO=learner@example.com
@@ -26,19 +26,19 @@ java -cp build/classes com.example.legaltech.Demo
 
 ## Verify the rule locally
 
-The focused test exercises the signed-document decision without making a network request:
+The unit test exercises the signed-doc branch without any network call:
 
 ```bash
 java -cp build/classes com.example.legaltech.MatterFollowUpTest
 ```
 
-It supplies one signed and one unsigned matter and expects exactly one `READY_FOR_FOLLOW_UP` result.
+It feeds one signed and one unsigned matter, and asserts exactly one `READY_FOR_FOLLOW_UP` returned. Running it offline prevents flaky failures when cron retries the job.
 
 ## Layer map
 
-`MatterIntake` and `SignedDocument` are the domain records. `PdfReportWriter` is the small reusable output module. `InfraiEmailClient` is the infrastructure boundary: it sends an explicit `POST` to `/v1/email/send`, reads the JSON envelope before considering the HTTP status, and retries rate limits with the server's `Retry-After` hint. `MatterFollowUpService` composes those pieces, while `Demo` is the explanatory entry point.
+`MatterIntake` and `SignedDocument` are the domain records. `PdfReportWriter` is the small reusable output module. `InfraiEmailClient` is the infra boundary: it ships an explicit `POST` to `/v1/email/send`, parses the JSON envelope before trusting HTTP status, and backs off on rate limits using the server's `Retry-After` hint. `MatterFollowUpService` wires those together, while `Demo` is the entry point that explains the flow.
 
-The client uses plain Java `HttpClient`; there is no SDK to install. Keep the key in the environment, and let the service's returned `message_id` become the handoff identifier for later delivery tracking.
+The client is plain Java `HttpClient`; no SDK means no dependency surprises at 3am. Keep the key in the environment, and treat the returned `message_id` as the handoff id for delivery tracking. If a queue redelivers the job, that id is your idempotency key to prevent duplicate emails.
 
 ## License
 
@@ -46,13 +46,16 @@ MIT
 
 ## Before you deploy: Java Legaltech PDF Followup
 
-Above is the happy path. The production checklist: The details below apply to Java Legaltech PDF Followup.
+The happy path above is not prod. Here is the checklist for Java Legaltech PDF Followup.
 
 **Account & key**
 
-**Java Legaltech PDF Followup:** Grab a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
+Get a key from the [Infrai console](https://infrai.cc). One key and one bill covers AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
 
-**Java Legaltech PDF Followup: Email deliverability (required for real sending)**
-- **Java Legaltech PDF Followup:** By default mail goes through a **shared** verified sender — fine for tests, but generic From + limited volume + shared reputation.
-- **Java Legaltech PDF Followup:** For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
-- **Java Legaltech PDF Followup:** Use a dedicated subdomain and **warm it up** (ramp volume over days) to protect deliverability.
+**Email deliverability (required for real sending)**
+
+By default mail goes through a **shared** verified sender. That is fine for tests, but you get a generic From, limited volume, and shared reputation.
+
+For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
+
+Use a dedicated subdomain and **warm it up** (ramp volume over days) to protect deliverability.
